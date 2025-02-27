@@ -25,11 +25,7 @@ class SAM2Base(torch.nn.Module):
         image_encoder,
         memory_attention,
         memory_encoder,
-        num_maskmem=30,  # default 1 input frame + 6 previous frames
-        # The memory bank's temporal stride during evaluation (i.e. the `r` parameter in XMem and Cutie; XMem and Cutie use r=5).
-        # For r>1, the (self.num_maskmem - 1) non-conditioning memory frames consist of
-        # (self.num_maskmem - 2) nearest frames from every r-th frames, plus the last frame.
-        memory_temporal_stride_for_eval=5,
+        num_maskmem=7,  # default 1 input frame + 6 previous frames
         image_size=512,
         backbone_stride=16,  # stride of the image backbone output
         sigmoid_scale_for_mem_enc=1.0,  # scale factor for mask sigmoid prob
@@ -41,7 +37,6 @@ class SAM2Base(torch.nn.Module):
         # we only cross-attend to the temporally closest `max_cond_frames_in_attn` conditioning frames in the encoder when tracking each frame). This gives the model
         # a temporal locality when handling a large number of annotated frames (since closer frames should be more important) and also avoids GPU OOM.
         max_cond_frames_in_attn=-1,
-        # max_cond_frames_in_attn=30,
         # on the first frame, whether to directly add the no-memory embedding to the image feature
         # (instead of using the transformer encoder)
         directly_add_no_mem_embed=False,
@@ -60,11 +55,14 @@ class SAM2Base(torch.nn.Module):
         use_multimask_token_for_obj_ptr: bool = False,
         # whether to use sigmoid to restrict ious prediction to [0-1]
         iou_prediction_use_sigmoid=False,
+        # The memory bank's temporal stride during evaluation (i.e. the `r` parameter in XMem and Cutie; XMem and Cutie use r=5).
+        # For r>1, the (self.num_maskmem - 1) non-conditioning memory frames consist of
+        # (self.num_maskmem - 2) nearest frames from every r-th frames, plus the last frame.
+        memory_temporal_stride_for_eval=1,
         # whether to apply non-overlapping constraints on the object masks in the memory encoder during evaluation (to avoid/alleviate superposing masks)
         non_overlap_masks_for_mem_enc=False,
         # whether to cross-attend to object pointers from other frames (based on SAM output tokens) in the encoder
-        # use_obj_ptrs_in_encoder=False, #original
-        use_obj_ptrs_in_encoder=True,
+        use_obj_ptrs_in_encoder=False,
         # the maximum number of object pointers from other frames in encoder cross attention (only relevant when `use_obj_ptrs_in_encoder=True`)
         max_obj_ptrs_in_encoder=16,
         # whether to add temporal positional encoding to the object pointers in the encoder (only relevant when `use_obj_ptrs_in_encoder=True`)
@@ -77,8 +75,7 @@ class SAM2Base(torch.nn.Module):
         use_signed_tpos_enc_to_obj_ptrs=False,
         # whether to only attend to object pointers in the past (before the current frame) in the encoder during evaluation
         # (only relevant when `use_obj_ptrs_in_encoder=True`; this might avoid pointer information too far in the future to distract the initial tracking)
-        # only_obj_ptrs_in_the_past_for_eval=False, #origianl
-        only_obj_ptrs_in_the_past_for_eval=True,
+        only_obj_ptrs_in_the_past_for_eval=False,
         # Whether to predict if there is an object in the frame
         pred_obj_scores: bool = False,
         # Whether to use an MLP to predict object scores
@@ -96,6 +93,7 @@ class SAM2Base(torch.nn.Module):
         # extra arguments used to construct the SAM mask decoder; if not None, it should be a dict of kwargs to be passed into `MaskDecoder` class.
         sam_mask_decoder_extra_args=None,
         compile_image_encoder: bool = False,
+        **kwargs,
     ):
         super().__init__()
 
@@ -631,10 +629,8 @@ class SAM2Base(torch.nn.Module):
                     if self.add_tpos_enc_to_obj_ptrs:
                         t_diff_max = max_obj_ptrs_in_encoder - 1
                         tpos_dim = C if self.proj_tpos_enc_in_obj_ptrs else self.mem_dim
-                        obj_pos = (
-                            torch.tensor(pos_list)
-                            .pin_memory()
-                            .to(device=device, non_blocking=True)
+                        obj_pos = torch.tensor(pos_list).to(
+                            device=device, non_blocking=True
                         )
                         obj_pos = get_1d_sine_pe(obj_pos / t_diff_max, dim=tpos_dim)
                         obj_pos = self.obj_ptr_tpos_proj(obj_pos)
@@ -665,7 +661,7 @@ class SAM2Base(torch.nn.Module):
             to_cat_memory = [self.no_mem_embed.expand(1, B, self.mem_dim)]
             to_cat_memory_pos_embed = [self.no_mem_pos_enc.expand(1, B, self.mem_dim)]
 
-        # Step 2: Concatenate the memories and forward through the transformer encoderㅋ
+        # Step 2: Concatenate the memories and forward through the transformer encoder
         memory = torch.cat(to_cat_memory, dim=0)
         memory_pos_embed = torch.cat(to_cat_memory_pos_embed, dim=0)
 
